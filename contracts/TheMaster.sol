@@ -6,6 +6,8 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/ITheMaster.sol";
+import "./interfaces/IMasterCoin.sol";
+import "./interfaces/ICloneNurse.sol";
 import "./interfaces/IRewardCalculator.sol";
 
 contract TheMaster is Ownable, ITheMaster {
@@ -19,6 +21,7 @@ contract TheMaster is Ownable, ITheMaster {
     struct PoolInfo {
         address addr;
         bool delegate;
+        bool mintable;
         uint256 allocPoint;
         uint256 lastRewardBlock;
         uint256 accRewardPerShare;
@@ -55,7 +58,7 @@ contract TheMaster is Ownable, ITheMaster {
         maidCoin = _maidCoin;
     }
 
-    function pendingReward(uint256 pid, uint256 userId) external view override returns (uint256) {
+    function pendingReward(uint256 pid, uint256 userId) external view override returns (uint256) {//
         PoolInfo memory pool = poolInfo[pid];
         UserInfo memory user = userInfo[pid][userId];
         (uint256 accRewardPerShare, uint256 supply) = (pool.accRewardPerShare, pool.supply);
@@ -84,23 +87,34 @@ contract TheMaster is Ownable, ITheMaster {
     function add(
         address addr,
         bool delegate,
+        bool mintable,
         uint256 allocPoint
+<<<<<<< Updated upstream
     ) public override onlyOwner {
+=======
+    ) external override onlyOwner {
+        massUpdatePools();
+>>>>>>> Stashed changes
         uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
         totalAllocPoint += allocPoint;
         uint256 pid = poolInfo.length;
         pidByAddr[addr] = pid;
-        poolInfo.push(PoolInfo(addr, delegate, allocPoint, lastRewardBlock, 0, 0));
-        emit Add(pid, addr, delegate, allocPoint);
+        poolInfo.push(PoolInfo(addr, delegate, mintable, allocPoint, lastRewardBlock, 0, 0));
+        emit Add(pid, addr, delegate, mintable, allocPoint);
     }
 
+<<<<<<< Updated upstream
     function set(uint256 pid, uint256 allocPoint) public override onlyOwner {
+=======
+    function set(uint256 pid, uint256 allocPoint) external override onlyOwner {
+        massUpdatePools();
+>>>>>>> Stashed changes
         totalAllocPoint = totalAllocPoint - poolInfo[pid].allocPoint + allocPoint;
         poolInfo[pid].allocPoint = allocPoint;
         emit Set(pid, allocPoint);
     }
 
-    function updatePool(PoolInfo storage pool, uint256 pid) internal {
+    function updatePool(PoolInfo storage pool, uint256 pid) internal {  //
         uint256 _lastRewardBlock = pool.lastRewardBlock;
         if (block.number <= _lastRewardBlock) {
             return;
@@ -120,7 +134,14 @@ contract TheMaster is Ownable, ITheMaster {
         pool.lastRewardBlock = block.number;
     }
 
-    function depositWithPermit(
+    function massUpdatePools() internal {
+        uint256 length = poolInfo.length;
+        for (uint256 pid = 0; pid < length; ++pid) {
+            updatePool(poolInfo[pid], pid);
+        }
+    }
+
+    function depositWithPermit(  //
         uint256 pid,
         uint256 amount,
         address userId,
@@ -128,12 +149,17 @@ contract TheMaster is Ownable, ITheMaster {
         uint8 v,
         bytes32 r,
         bytes32 s
+<<<<<<< Updated upstream
     ) public override {
         maidCoin.permit(msg.sender, address(this), amount, deadline, v, r, s);
+=======
+    ) external override {
+        // token.permit(msg.sender, address(this), amount, deadline, v, r, s);
+>>>>>>> Stashed changes
         deposit(pid, amount, uint256(uint160(userId)));
     }
 
-    function deposit(
+    function deposit(   //
         uint256 pid,
         uint256 amount,
         uint256 userId
@@ -141,8 +167,8 @@ contract TheMaster is Ownable, ITheMaster {
         PoolInfo storage pool = poolInfo[pid];
         UserInfo storage user = userInfo[pid][userId];
         updatePool(pool, pid);
-        pool.supply += amount;
         uint256 _accRewardPerShare = pool.accRewardPerShare;
+
         uint256 _amount = user.amount;
         if (_amount > 0) {
             uint256 pending = ((user.amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
@@ -153,13 +179,14 @@ contract TheMaster is Ownable, ITheMaster {
         } else {
             IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
         }
+        pool.supply += amount;
         _amount += amount;
         user.amount = _amount;
         user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
         emit Deposit(userId, pid, amount);
     }
 
-    function withdraw(
+    function withdraw(  //
         uint256 pid,
         uint256 amount,
         uint256 userId
@@ -185,7 +212,11 @@ contract TheMaster is Ownable, ITheMaster {
         emit Withdraw(userId, pid, amount);
     }
 
+<<<<<<< Updated upstream
     function emergencyWithdraw(uint256 pid) public override {
+=======
+    function emergencyWithdraw(uint256 pid) external override { //
+>>>>>>> Stashed changes
         PoolInfo storage pool = poolInfo[pid];
         require(!pool.delegate, "TheMaster: Pool should be non-delegate");
         // updatePool(pool, pid);
@@ -198,17 +229,29 @@ contract TheMaster is Ownable, ITheMaster {
         user.rewardDebt = 0;
     }
 
+<<<<<<< Updated upstream
     function claimWinningBonus(uint256 userId) public override returns (uint256 amount) {
+=======
+    function claimWinningBonus(address to, uint256 userId) external override returns (uint256 amount) {
+>>>>>>> Stashed changes
         require(winningBonus > 0, "TheMaster: No winning bonus yet");
         require(userId == lastWinningBonusTaker && userId < WINNING_BONUS_TAKERS, "TheMaster: Not proper user");
-        PoolInfo memory pool = poolInfo[1];
+        PoolInfo memory pool = poolInfo[2];
         require(pool.addr == msg.sender, "TheMaster: Not called by the pool");
         lastWinningBonusTaker++;
         amount = winningBonus / WINNING_BONUS_TAKERS;
-        safeRewardTransfer(msg.sender, amount);
+        safeRewardTransfer(to, amount);
         emit ClaimWinningBonus(userId, amount);
     }
 
+<<<<<<< Updated upstream
+=======
+    function mint(address to, uint256 amount) external override {   //
+        require(msg.sender == poolInfo[pidByAddr[msg.sender]].mintable, "TheMaster: called from un-mintable");
+        maidCoin.mint(to, amount);
+    }
+
+>>>>>>> Stashed changes
     function safeRewardTransfer(address to, uint256 amount) internal {
         uint256 balance = maidCoin.balanceOf(address(this));
         if (amount > balance) {

@@ -2,9 +2,10 @@
 pragma solidity ^0.8.5;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "./libraries/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "./uniswapv2/interfaces/IUniswapV2Pair.sol";
-import "./interfaces/IERC1271.sol";
+import "./interfaces/ICloneNurse.sol";
+import "./interfaces/ITheMaster.sol";
 
 contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
     struct NurseType {
@@ -14,55 +15,54 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
     }
     struct Nurse {
         uint256 nurseType;
-<<<<<<< Updated upstream
-        uint256 supportPower;
-        uint256 masterAccReward;
-        uint256 supporterAccReward;
-        bool supportable;
+        uint256 supportedLPAmounts;     //actually it's not needed. just for showing off.
+        uint256 rewardDebt;
+        bool supportable;   //maybe not needed.
     }
     struct SupportInfo {
         uint256 groupId;
         address supporter;
         uint256 lpTokenAmount;
         uint256 accReward;
-=======
->>>>>>> Stashed changes
     }
 
     INursePart public override nursePart;
     IMaidCoin public override maidCoin;
     ITheMaster public override theMaster;
+    IUniswapV2Pair public override lpToken;
 
-    mapping(uint256 => uint256) public supportRoute;
-    mapping(address => uint256) public supportTo;
-    mapping(uint256 => uint256) public supportedPower;
-    mapping(uint256 => uint256) public totalRewardsFromSupporters;
-
+    uint256 public override lpTokenToNursePower = 1;
     uint256 public immutable WINNING_BONUS_TAKERS;
 
     NurseType[] public override nurseTypes;
     Nurse[] public override nurses;
 
-<<<<<<< Updated upstream
-    SupportInfo[] public override supportInfo;
-    mapping(uint256 => uint256) public override idOfGroupId;
-    mapping(uint256 => bool) public override destroyed;
+    mapping(uint256 => uint256) public supportTo;
+
+    SupportInfo[] public override supportInfo;//
+    mapping(uint256 => uint256) public override idOfGroupId;//
+    mapping(uint256 => bool) public override destroyed;//
 
     uint256 private lastUpdateBlock;
     uint256 private _accRewardPerShare;
     uint256 private totalPower;
-=======
->>>>>>> Stashed changes
 
     constructor(
         address nursePartAddr,
         address maidCoinAddr,
-        address theMasterAddr
+        address theMasterAddr,
+        address lpTokenAddr
     ) {
         nursePart = INursePart(nursePartAddr);
         maidCoin = IMaidCoin(maidCoinAddr);
         theMaster = ITheMaster(theMasterAddr);
+        lpToken = IUniswapV2Pair(lpTokenAddr);
         WINNING_BONUS_TAKERS = theMaster.WINNING_BONUS_TAKERS();
+    }
+
+    function changeLPTokenToNursePower(uint256 value) external onlyOwner {
+        lpTokenToNursePower = value;
+        emit ChangeLPTokenToNursePower(value);
     }
 
     function addNurseType(
@@ -71,87 +71,95 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         uint256 power
     ) external onlyOwner returns (uint256 nurseType) {
         nurseType = nurseTypes.length;
-        nurseTypes.push(NurseType({partCount: partCount, destroyReturn: destroyReturn, power: power}));
+        nurseTypes.push(NurseType({partCount: partCount, destroyReturn: destroyReturn, power: (power * 1e18)}));
     }
 
-    function assemble(uint256 nurserType, bool supportable) external override returns (uint256 id) {
+    function originPowerOf(uint256 nurseType) internal view returns (uint256) {
+        return nurseTypes[nurseType].power;
+    }
+
+    function assemble(uint256 nurserType, bool supportable, uint256 pid) external override returns (uint256 id) {
+        (address addr, , , , , ) = theMaster.poolInfo(pid);
+        require(addr == address(this));
+
         NurseType memory nurseType = nurseTypes[nurserType];
         nursePart.safeTransferFrom(msg.sender, address(this), nurserType, nurseType.partCount, "");
         nursePart.burn(nurserType, nurseType.partCount);
-        // deposit needed.
 
-<<<<<<< Updated upstream
-        uint256 power = originPowerOf(nurserType);
-        totalPower += power;
-
-        uint256 masterAccReward = (_update() * power) / 1e18;   //TODO
+        uint256 power = nurseType.power;
+        id = nurses.length;
         nurses.push(
             Nurse({
                 nurseType: nurserType,
-                supportPower: 0,
-                masterAccReward: masterAccReward,
-                supporterAccReward: 0,
+                supportedLPAmounts: 0,
+                rewardDebt: 0,
                 supportable: supportable
             })
         );
-
-        id = nurses.length;
-        idOfGroupId[id] = id;
-        theMaster.deposit(pid, masterAccReward, id);
+        supportTo[id] = id;
         if (id < WINNING_BONUS_TAKERS) {
             uint256 amount = theMaster.claimWinningBonus(id);
-=======
-        uint256 power = nurseType.power;
-        id = nurses.length;
-        nurses.push(Nurse({nurseType: nurserType}));
-        supportRoute[id] = id;
-        if (id < WINNING_BONUS_TAKERS) {
-            uint256 amount = theMaster.claimWinningBonus(msg.sender, id);
->>>>>>> Stashed changes
-            maidCoin.transfer(msg.sender, amount);
+            safeRewardTransfer(msg.sender, amount);
         }
+        uint256 _rewardDebt = _deposit(pid, power, id, 0, 0);
+        nurses[id].rewardDebt = _rewardDebt;
         _mint(msg.sender, id);
     }
 
     //function assembleWithPermit           //TODO
 
-    function destroy(uint256 id, uint256 toId) external override {
+    function changeSupportable(uint256 id, bool supportable) external override {
+        require(msg.sender == ownerOf(id));
+        nurses[id].supportable = supportable;
+        emit ChangeSupportable(id, supportable);
+    }
+
+    function destroy(uint256 id, uint256 toId, uint256 pid) external override {
         require(msg.sender == ownerOf(id));
         require(ownerOf(toId) != address(0));
-        require(!destroyed[id]);
-        require(!destroyed[toId]);
         require(toId != id);
-<<<<<<< Updated upstream
         (address addr, , , , , ) = theMaster.poolInfo(pid);
         require(addr == address(this));
 
-        idOfGroupId[id] = toId;
-        destroyed[id] = true;
-        //TODO : destroyReturn
+        Nurse memory nurse = nurses[id];
+
+        nurses[toId].supportedLPAmounts += nurse.supportedLPAmounts;
+        supportTo[id] = toId;
+
+        uint256 _rewardDebt = _withdraw(pid, power, id, originPowerOf(nurse.nurseType), nurse.rewardDebt);
 
         (uint256 amount, ) = theMaster.userInfo(pid, id);
+        uint256 balanceBefore = maidCoin.balanceOf(address(this));
         theMaster.withdraw(pid, amount, id);
+        uint256 balanceAfter = maidCoin.balanceOf(address(this));
+        theMaster.mintForNurseDestroy(msg.sender, nurseTypes[nurse.nurseType].destroyReturn);
 
+        maidCoin.transfer(msg.sender, balanceAfter - balanceBefore);
         totalPower -= originPowerOf(id);
-=======
-        // withdraw needed.
-
-        supportRoute[id] = toId;
-        supportedPower[toId] += supportedPower[id];
-        theMaster.mint(msg.sender, nurseTypes[nurses[id].nurseType].destroyReturn);
->>>>>>> Stashed changes
         _burn(id);
     }
 
-    // claim
-    // pendingReward
+    function supportWithPermit(
+        uint256 id,
+        uint256 lpTokenAmount,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external override {
+        lpToken.permit(msg.sender, address(this), lpTokenAmount, deadline, v, r, s);
+        support(id, lpTokenAmount);
+    }
 
-    // mapping(uint256 => uint256) public supportRoute;
-    // mapping(address => uint256) public supportTo;
-    // mapping(uint256 => uint256) public supportedPower;
-    // mapping(uint256 => uint256) public totalRewardsFromSupporters;
+    function support(uint256 id, uint256 lpTokenAmount) public override {
+        require(ownerOf(id) != address(0));
+        require(!destroyed[id]);
+        require(nurses[id].supportable);
+        uint256 supportId = supportInfo.length;
+        supportInfo.push(SupportInfo(id, msg.sender, lpTokenAmount, 0));
 
-<<<<<<< Updated upstream
+        claimSupport(supportId);
+
         _increaseSupport(id, lpTokenAmount);
 
         emit Support(supportId, msg.sender, id, lpTokenAmount);
@@ -195,7 +203,7 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
     }
 
     function _increaseSupport(uint256 id, uint256 lpTokenAmount) internal {
-        uint256 supportPower = (lpTokenAmount * lpTokenToNursePower) / 1e18;
+        uint256 supportPower = lpTokenAmount * lpTokenToNursePower;
         nurses[id].supportPower += supportPower;
         totalPower += supportPower;
 
@@ -210,7 +218,7 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         claimSupport(supportId);
 
         uint256 id = _findId(_support.groupId);
-        uint256 supportPower = (lpTokenAmount * lpTokenToNursePower) / 1e18;
+        uint256 supportPower = lpTokenAmount * lpTokenToNursePower;     //when updating ratio. check.
         nurses[id].supportPower -= supportPower;
         totalPower -= supportPower;
 
@@ -313,17 +321,41 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         power = originPower + nurse.supportPower;
         (, , , , uint256 accRewardPerShare, ) = theMaster.poolInfo(1);
         acc = (accRewardPerShare * power) / 1e18;
-=======
-    function setSupportTo(uint256 to) public {
-        require(msg.sender == address(theMaster));
     }
 
-    function changeSupportRoute(uint256 to) public {
-        require(msg.sender == address(theMaster));
+    function _deposit(uint256 pid, uint256 power, uint256 id, uint256 lastPower, uint256 lastRewardDebt) internal returns (uint256 rewardDebt) {
+        uint256 _accRewardPerShare = _update();
+        theMaster.deposit(pid, power, id);
+        if (lastPower > 0) {
+            uint256 pending = lastPower * _accRewardPerShare / 1e18 - lastRewardDebt;
+            if (pending > 0) {
+                safeRewardTransfer(msg.sender, pending);
+            }
+        }
+        if (power > 0) {
+            totalPower += power;
+        }
+        rewardDebt = (lastPower + power) * _accRewardPerShare / 1e18;
+    }
+    //re-withdrawing check. destory - o, desupport - ?
+    function _withdraw(uint256 pid, uint256 power, uint256 id, uint256 lastPower, uint256 lastRewardDebt) internal returns (uint256 rewardDebt) {
+        uint256 _accRewardPerShare = _update();
+        require(lastPower >= power);//
+        theMaster.withdraw(pid, power, id);
+        uint256 pending = lastPower * _accRewardPerShare / 1e18 - lastRewardDebt;
+        if (pending > 0) {
+            safeRewardTransfer(msg.sender, pending);
+        }
+        totalPower -= power;
+        rewardDebt = (lastPower - power) * _accRewardPerShare / 1e18;
     }
 
-    function changeSupportedPower(uint256 id, uint256 power) public {
-        require(msg.sender == address(theMaster));
->>>>>>> Stashed changes
+    function safeRewardTransfer(address to, uint256 amount) internal {
+        uint256 balance = maidCoin.balanceOf(address(this));
+        if (amount > balance) {
+            maidCoin.transfer(to, balance);
+        } else {
+            maidCoin.transfer(to, amount);
+        }
     }
 }

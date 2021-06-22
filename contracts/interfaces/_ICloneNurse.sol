@@ -2,6 +2,9 @@
 pragma solidity ^0.8.5;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "../uniswapv2/interfaces/IUniswapV2Pair.sol";
+import "./INursePart.sol";
+import "./ITheMaster.sol";
 
 interface ICloneNurse is IERC721 {
     event ChangeSupportable(uint256 indexed id, bool supportable);
