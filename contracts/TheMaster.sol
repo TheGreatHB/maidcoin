@@ -19,7 +19,7 @@ contract TheMaster is Ownable, ITheMaster {
     }
 
     struct PoolInfo {
-        address addr;   //token -> tokenAddress / contract -> contractAddress & delegate = true.
+        address addr;
         bool delegate;
         bool mintable;
         uint256 allocPoint;
@@ -34,6 +34,7 @@ contract TheMaster is Ownable, ITheMaster {
     uint256 public immutable override decreasingInterval;
     uint256 public immutable override startBlock;
     IMaidCoin public immutable override maidCoin;
+    ICloneNurse public override cloneNurse;
 
     address public override rewardCalculator;
 
@@ -41,7 +42,7 @@ contract TheMaster is Ownable, ITheMaster {
     mapping(uint256 => mapping(uint256 => UserInfo)) public override userInfo;
     mapping(address => uint256) public override pidByAddr;
     uint256 public override totalAllocPoint;
-    mapping(uint256 => bool) public supporterPid;
+    mapping(uint256 => bool) public isSupporterPool;
 
     constructor(
         uint256 _initialRewardPerBlock,
@@ -57,7 +58,11 @@ contract TheMaster is Ownable, ITheMaster {
 
     function pendingReward(uint256 pid, uint256 userId) external view override returns (uint256) {
         PoolInfo memory pool = poolInfo[pid];
-        UserInfo memory user = userInfo[pid][userId];
+        if (pool.delegate) {
+            UserInfo memory user = userInfo[pid][userId];
+        } else {
+            UserInfo memory user = userInfo[pid][address(uint160(userId))];
+        }
         (uint256 accRewardPerShare, uint256 supply) = (pool.accRewardPerShare, pool.supply);
         if (block.number > pool.lastRewardBlock && supply != 0) {
             uint256 reward = ((block.number - pool.lastRewardBlock) * rewardPerBlock() * pool.allocPoint) /
@@ -78,6 +83,11 @@ contract TheMaster is Ownable, ITheMaster {
     function changeRewardCalculator(address addr) external override onlyOwner {
         rewardCalculator = addr;
         emit ChangeRewardCalculator(addr);
+    }
+
+    function setCloneNurse(address addr) external override onlyOwner {
+        cloneNurse = ICloneNurse(addr);
+        emit ChangeCloneNurse(addr);
     }
 
     function add(
@@ -125,7 +135,7 @@ contract TheMaster is Ownable, ITheMaster {
         }
     }
 
-    function depositWithPermit(  //
+    function depositWithPermit(     //
         uint256 pid,
         uint256 amount,
         address userId,
@@ -138,60 +148,38 @@ contract TheMaster is Ownable, ITheMaster {
         deposit(pid, amount, uint256(uint160(userId)));
     }
 
-    // function deposit(
-    //     uint256 pid,
-    //     uint256 amount,
-    //     uint256 userId
-    // ) public override {
-    //     require(pid != supporterPid, "TheMaster: use support func");
-    //     PoolInfo storage pool = poolInfo[pid];
-    //     UserInfo storage user = userInfo[pid][userId];
-    //     updatePool(pool, pid);
-    //     uint256 _accRewardPerShare = pool.accRewardPerShare;
-    //     uint256 _amount = user.amount;
-    //     if (_amount > 0) {
-    //         uint256 pending = ((user.amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
-    //         safeRewardTransfer(msg.sender, pending);
-    //     }
-    //     if (pool.delegate) {
-    //         require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
-    //     } else {
-    //         require(userId == msg.sender, "TheMaster: deposit to your address");
-    //         if (amount > 0) IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
-    //     }
-    //     if (amount > 0) {
-    //         pool.supply += amount;
-    //         _amount += amount;
-    //         user.amount = _amount;
-    //     }
-    //     user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
-    //     emit Deposit(userId, pid, amount);
-    // }
-
     function deposit(
         uint256 pid,
         uint256 amount,
         uint256 userId
     ) public override {
-        require(pid != supporterPid, "TheMaster: use support func");
+        require(!isSupporterPool[pid], "TheMaster: use support func");
         PoolInfo storage pool = poolInfo[pid];
         if (pool.delegate) {
             require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
-            _deposit(pool, pid, amount, userId, false);
+            UserInfo storage user = userInfo[pid][userId];
+            _deposit(pool, user, pid, amount, false);
         } else {
             require(address(uint160(userId)) == msg.sender, "TheMaster: deposit to your address");
-            _deposit(pool, pid, amount, userId, true);
+            UserInfo storage user = userInfo[pid][address(uint160(userId))];
+            _deposit(pool, user, pid, amount, true);
         }
+        emit Deposit(userId, pid, amount);
     }
 
-    function _deposit(PoolInfo storage pool, uint256 pid, uint256 amount, uint256 userId, bool tokenTransfer) internal {
-        UserInfo storage user = userInfo[pid][userId];
+    function _deposit(
+        PoolInfo storage pool,
+        UserInfo storage user,
+        uint256 pid,
+        uint256 amount,
+        bool tokenTransfer
+    ) internal {
         updatePool(pool, pid);
         uint256 _accRewardPerShare = pool.accRewardPerShare;
         uint256 _amount = user.amount;
         if (_amount > 0) {
-            uint256 pending = ((user.amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
-            safeRewardTransfer(msg.sender, pending);
+            uint256 pending = ((_amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
+            if (pending > 0) safeRewardTransfer(msg.sender, pending);
         }
         if (amount > 0) {
             if (tokenTransfer) {
@@ -202,7 +190,6 @@ contract TheMaster is Ownable, ITheMaster {
             user.amount = _amount;
         }
         user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
-        emit Deposit(userId, pid, amount);
     }
 
     function withdraw(
@@ -210,26 +197,34 @@ contract TheMaster is Ownable, ITheMaster {
         uint256 amount,
         uint256 userId
     ) public override {
-        require(pid != supporterPid, "TheMaster: use desupport func");
+        require(!isSupporterPool[pid], "TheMaster: use desupport func");
         PoolInfo storage pool = poolInfo[pid];
         if (pool.delegate) {
             require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
-            _withdraw(pool, pid, amount, userId, false);
+            UserInfo storage user = userInfo[pid][userId];
+            _withdraw(pool, user, pid, amount, false);
         } else {
             require(address(uint160(userId)) == msg.sender, "TheMaster: Not called by user");
-            _withdraw(pool, pid, amount, userId, true);
+            UserInfo storage user = userInfo[pid][address(uint160(userId))];
+            _withdraw(pool, user, pid, amount, true);
         }
+        emit Withdraw(userId, pid, amount);
     }
 
-    function _withdraw(PoolInfo storage pool, uint256 pid, uint256 amount, uint256 userId, bool tokenTransfer) internal {
-        UserInfo storage user = userInfo[pid][userId];
+    function _withdraw(
+        PoolInfo storage pool,
+        UserInfo storage user,
+        uint256 pid,
+        uint256 amount,
+        bool tokenTransfer
+    ) internal {
         uint256 _amount = user.amount;
         require(_amount >= amount, "TheMaster: Insufficient amount");
         updatePool(pool, pid);
         uint256 _accRewardPerShare = pool.accRewardPerShare;
         uint256 pending = ((_amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
-        safeRewardTransfer(msg.sender, pending);
-        if(amount > 0) {
+        if (pending > 0) safeRewardTransfer(msg.sender, pending);
+        if (amount > 0) {
             if (tokenTransfer) {
                 IERC20(pool.addr).safeTransfer(msg.sender, amount);
             }
@@ -238,29 +233,98 @@ contract TheMaster is Ownable, ITheMaster {
             user.amount = _amount;
         }
         user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
-        emit Withdraw(userId, pid, amount);
     }
 
-    function emergencyWithdraw(uint256 pid) external override { //
+    function emergencyWithdraw(uint256 pid) external override {
+        require(!isSupporterPool[pid], "TheMaster: use desupport func");
         PoolInfo storage pool = poolInfo[pid];
         require(!pool.delegate, "TheMaster: Pool should be non-delegate");
-        // updatePool(pool, pid);
         UserInfo storage user = userInfo[pid][uint256(uint160(msg.sender))];
         uint256 amounts = user.amount;
-        pool.supply -= amounts;
-        IERC20(pool.addr).safeTransfer(address(msg.sender), amounts);
-        emit EmergencyWithdraw(msg.sender, pid, amounts);
         user.amount = 0;
         user.rewardDebt = 0;
+        pool.supply -= amounts;
+        IERC20(pool.addr).safeTransfer(msg.sender, amounts);
+        emit EmergencyWithdraw(msg.sender, pid, amounts);
     }
 
-    function mint(address to, uint256 amount) external override {   //
+    function support(
+        uint256 pid,
+        uint256 amount,
+        uint256 supportTo
+    ) external {
+        require(isSupporterPool[pid], "TheMaster: use deposit func");
+        PoolInfo storage pool = poolInfo[pid];
+        UserInfo storage user = userInfo[pid][msg.sender];
+        updatePool(pool, pid);
+        uint256 _accRewardPerShare = pool.accRewardPerShare;
+        uint256 _amount = user.amount;
+        if (_amount > 0) {
+            uint256 pending = ((_amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
+            if (pending > 0){
+                uint256 amountToNurseOwner = pending / 10;
+                if (amountToNurseOwner > 0) {
+                    (address nurseOwner, uint256 _supportTo) = cloneNurse.checkSupportRoute(msg.sender);
+                    safeRewardTransfer(nurseOwner, amountToNurseOwner);
+                    cloneNurse.recordRewardsTransfer(msg.sender, _supportTo, amountToNurseOwner);
+                }
+                safeRewardTransfer(msg.sender, pending - amountToNurseOwner);
+            }
+        }
+        if (amount > 0) {
+            if (_amount == 0) {
+                require(cloneNurse.ownerOf(supportTo) != address(0));
+                cloneNurse.setSupportTo(msg.sender, supportTo);
+                cloneNurse.changeSupportedPower(supportTo, amount);
+            } else {
+                cloneNurse.changeSupportedPower(cloneNurse.supportTo(msg.sender), amount);
+            }
+            IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
+            pool.supply += amount;
+            _amount += amount;
+            user.amount = _amount;
+        }
+        user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
+    }
+
+    function desupport(
+        uint256 pid,
+        uint256 amount
+    ) external {
+        require(isSupporterPool[pid], "TheMaster: use withdraw func");
+        PoolInfo storage pool = poolInfo[pid];
+        UserInfo storage user = userInfo[pid][msg.sender];
+        uint256 _amount = user.amount;
+        require(_amount >= amount, "TheMaster: Insufficient amount");
+        updatePool(pool, pid);
+        uint256 _accRewardPerShare = pool.accRewardPerShare;
+        uint256 pending = ((_amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
+        if (pending > 0) {
+            uint256 amountToNurseOwner = pending / 10;
+            if (amountToNurseOwner > 0) {
+                (address nurseOwner, uint256 _supportTo) = cloneNurse.checkSupportRoute(msg.sender);
+                safeRewardTransfer(nurseOwner, amountToNurseOwner);
+                cloneNurse.recordRewardsTransfer(msg.sender, _supportTo, amountToNurseOwner);
+            }
+            safeRewardTransfer(msg.sender, pending - amountToNurseOwner);
+        }
+        if (amount > 0) {
+            cloneNurse.changeSupportedPower(cloneNurse.supportTo(msg.sender), -int256(amount));
+            IERC20(pool.addr).safeTransfer(msg.sender, amount);
+            pool.supply -= amount;
+            _amount -= amount;
+            user.amount = _amount;
+        }
+        user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
+    }
+
+    function mint(address to, uint256 amount) external override {
         require(msg.sender == poolInfo[pidByAddr[msg.sender]].mintable, "TheMaster: called from un-mintable");
         maidCoin.mint(to, amount);
     }
 
-    function setSupporterPid(uint256 pid, bool status) external onlyOwner {
-        supporterPid[pid] = status;
+    function setIsSupporterPool(uint256 pid, bool status) external onlyOwner {
+        isSupporterPool[pid] = status;
     }
 
     function safeRewardTransfer(address to, uint256 amount) internal {
