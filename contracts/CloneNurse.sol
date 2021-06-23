@@ -3,8 +3,8 @@ pragma solidity ^0.8.5;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./libraries/ERC721.sol";
-import "./uniswapv2/interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IERC1271.sol";
+import "./interfaces/ICloneNurse.sol";
 
 contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
     struct NurseType {
@@ -20,10 +20,10 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
     IMaidCoin public override maidCoin;
     ITheMaster public override theMaster;
 
-    mapping(uint256 => uint256) public supportRoute;
-    mapping(address => uint256) public supportTo;
-    mapping(uint256 => uint256) public supportedPower;
-    mapping(uint256 => uint256) public totalRewardsFromSupporters;
+    mapping(uint256 => uint256) public override supportRoute;
+    mapping(address => uint256) public override supportTo;
+    mapping(uint256 => uint256) public override supportedPower;
+    mapping(uint256 => uint256) public override totalRewardsFromSupporters;
 
     NurseType[] public override nurseTypes;
     Nurse[] public override nurses;
@@ -47,11 +47,11 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         nurseTypes.push(NurseType({partCount: partCount, destroyReturn: destroyReturn, power: power}));
     }
 
-    function assemble(uint256 nurserType) public override returns (uint256 id) {
+    function assemble(uint256 nurserType) public override {
         NurseType memory nurseType = nurseTypes[nurserType];
         nursePart.safeTransferFrom(msg.sender, address(this), nurserType, nurseType.partCount, "");
         nursePart.burn(nurserType, nurseType.partCount);
-        id = nurses.length;
+        uint256 id = nurses.length;
         theMaster.deposit(2, nurseType.power, id);
         nurses.push(Nurse({nurseType: nurserType}));
         supportRoute[id] = id;
@@ -64,7 +64,7 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external override returns (uint256 id) {
+    ) external override {
         nursePart.permit(msg.sender, address(this), deadline, v, r, s);
         assemble(nurserType);
     }
@@ -96,20 +96,21 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         uint256 balanceAfter = maidCoin.balanceOf(address(this));
         uint256 reward = balanceAfter - balanceBefore;
         if (reward > 0) maidCoin.transfer(msg.sender, reward);
+        emit Claim(id, msg.sender, reward);
     }
 
     function pendingReward(uint256 id) external view override returns (uint256) {
         require(_exists(id));
-        theMaster.pendingReward(2, id);
+        return theMaster.pendingReward(2, id);
     }
 
-    function setSupportTo(address supporter, uint256 to) public {
+    function setSupportTo(address supporter, uint256 to) public override {
         require(msg.sender == address(theMaster));
         supportTo[supporter] = to;
         emit SupportRecorded(supporter, to);
     }
 
-    function checkSupportRoute(address supporter) public returns (address, uint256) {
+    function checkSupportRoute(address supporter) public override returns (address, uint256) {
         require(msg.sender == address(theMaster));
         uint256 _supportTo = supportTo[supporter];
         uint256 _route = supportRoute[_supportTo];
@@ -125,12 +126,12 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         }
     }
 
-    function changeSupportedPower(uint256 id, int256 power) public {
+    function changeSupportedPower(uint256 id, int256 power) public override {
         require(msg.sender == address(theMaster));
-        int256 supportedPower = int256(supportedPower[id]);
-        if (power < 0) require(supportedPower >= (-power));
-        supportedPower += power;
-        supportedPower[id] = uint256(supportedPower);
+        int256 _supportedPower = int256(supportedPower[id]);
+        if (power < 0) require(_supportedPower >= (-power));
+        _supportedPower += power;
+        supportedPower[id] = uint256(_supportedPower);
         emit SupportPowerChanged(id, power);
     }
 
@@ -138,7 +139,7 @@ contract CloneNurse is Ownable, ERC721("CloneNurse", "CNURSE"), ICloneNurse {
         address supporter,
         uint256 id,
         uint256 amounts
-    ) public {
+    ) public override {
         require(msg.sender == address(theMaster));
         totalRewardsFromSupporters[id] += amounts;
         emit SupportingRewardsTransfer(supporter, id, amounts);
