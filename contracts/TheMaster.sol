@@ -19,7 +19,7 @@ contract TheMaster is Ownable, ITheMaster {
     }
 
     struct PoolInfo {
-        address addr;
+        address addr;   //token -> tokenAddress / contract -> contractAddress & delegate = true.
         bool delegate;
         bool mintable;
         uint256 allocPoint;
@@ -28,7 +28,6 @@ contract TheMaster is Ownable, ITheMaster {
         uint256 supply;
     }
 
-    uint8 public constant override WINNING_BONUS_TAKERS = 30;
     uint256 private constant PRECISION = 1e20;
 
     uint256 public immutable override initialRewardPerBlock;
@@ -42,9 +41,7 @@ contract TheMaster is Ownable, ITheMaster {
     mapping(uint256 => mapping(uint256 => UserInfo)) public override userInfo;
     mapping(address => uint256) public override pidByAddr;
     uint256 public override totalAllocPoint;
-
-    uint256 public override winningBonus;
-    uint256 public override lastWinningBonusTaker;
+    mapping(uint256 => bool) public supporterPid;
 
     constructor(
         uint256 _initialRewardPerBlock,
@@ -58,7 +55,7 @@ contract TheMaster is Ownable, ITheMaster {
         maidCoin = _maidCoin;
     }
 
-    function pendingReward(uint256 pid, uint256 userId) external view override returns (uint256) {//
+    function pendingReward(uint256 pid, uint256 userId) external view override returns (uint256) {
         PoolInfo memory pool = poolInfo[pid];
         UserInfo memory user = userInfo[pid][userId];
         (uint256 accRewardPerShare, uint256 supply) = (pool.accRewardPerShare, pool.supply);
@@ -67,7 +64,6 @@ contract TheMaster is Ownable, ITheMaster {
                 totalAllocPoint;
             accRewardPerShare = accRewardPerShare + (reward * PRECISION) / supply;
         }
-        if (pid == 1 && supply == 0) return 0;
         return ((user.amount * accRewardPerShare) / PRECISION) - user.rewardDebt;
     }
 
@@ -89,12 +85,8 @@ contract TheMaster is Ownable, ITheMaster {
         bool delegate,
         bool mintable,
         uint256 allocPoint
-<<<<<<< Updated upstream
-    ) public override onlyOwner {
-=======
     ) external override onlyOwner {
         massUpdatePools();
->>>>>>> Stashed changes
         uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
         totalAllocPoint += allocPoint;
         uint256 pid = poolInfo.length;
@@ -103,32 +95,24 @@ contract TheMaster is Ownable, ITheMaster {
         emit Add(pid, addr, delegate, mintable, allocPoint);
     }
 
-<<<<<<< Updated upstream
-    function set(uint256 pid, uint256 allocPoint) public override onlyOwner {
-=======
     function set(uint256 pid, uint256 allocPoint) external override onlyOwner {
         massUpdatePools();
->>>>>>> Stashed changes
         totalAllocPoint = totalAllocPoint - poolInfo[pid].allocPoint + allocPoint;
         poolInfo[pid].allocPoint = allocPoint;
         emit Set(pid, allocPoint);
     }
 
-    function updatePool(PoolInfo storage pool, uint256 pid) internal {  //
+    function updatePool(PoolInfo storage pool, uint256 pid) internal {
         uint256 _lastRewardBlock = pool.lastRewardBlock;
         if (block.number <= _lastRewardBlock) {
             return;
         }
         uint256 supply = pool.supply;
-        uint256 reward = ((block.number - _lastRewardBlock) * rewardPerBlock() * pool.allocPoint) / totalAllocPoint;
-        if (supply == 0) {
+        if (supply == 0 || pool.allocPoint == 0) {
             pool.lastRewardBlock = block.number;
-            if (pid == 1) {
-                maidCoin.mint(address(this), reward);
-                winningBonus = reward;
-            }
             return;
         }
+        uint256 reward = ((block.number - _lastRewardBlock) * rewardPerBlock() * pool.allocPoint) / totalAllocPoint;
         maidCoin.mint(address(this), reward);
         pool.accRewardPerShare = pool.accRewardPerShare + (reward * PRECISION) / supply;
         pool.lastRewardBlock = block.number;
@@ -149,74 +133,115 @@ contract TheMaster is Ownable, ITheMaster {
         uint8 v,
         bytes32 r,
         bytes32 s
-<<<<<<< Updated upstream
-    ) public override {
-        maidCoin.permit(msg.sender, address(this), amount, deadline, v, r, s);
-=======
     ) external override {
         // token.permit(msg.sender, address(this), amount, deadline, v, r, s);
->>>>>>> Stashed changes
         deposit(pid, amount, uint256(uint160(userId)));
     }
 
-    function deposit(   //
+    // function deposit(
+    //     uint256 pid,
+    //     uint256 amount,
+    //     uint256 userId
+    // ) public override {
+    //     require(pid != supporterPid, "TheMaster: use support func");
+    //     PoolInfo storage pool = poolInfo[pid];
+    //     UserInfo storage user = userInfo[pid][userId];
+    //     updatePool(pool, pid);
+    //     uint256 _accRewardPerShare = pool.accRewardPerShare;
+    //     uint256 _amount = user.amount;
+    //     if (_amount > 0) {
+    //         uint256 pending = ((user.amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
+    //         safeRewardTransfer(msg.sender, pending);
+    //     }
+    //     if (pool.delegate) {
+    //         require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
+    //     } else {
+    //         require(userId == msg.sender, "TheMaster: deposit to your address");
+    //         if (amount > 0) IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
+    //     }
+    //     if (amount > 0) {
+    //         pool.supply += amount;
+    //         _amount += amount;
+    //         user.amount = _amount;
+    //     }
+    //     user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
+    //     emit Deposit(userId, pid, amount);
+    // }
+
+    function deposit(
         uint256 pid,
         uint256 amount,
         uint256 userId
     ) public override {
+        require(pid != supporterPid, "TheMaster: use support func");
         PoolInfo storage pool = poolInfo[pid];
+        if (pool.delegate) {
+            require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
+            _deposit(pool, pid, amount, userId, false);
+        } else {
+            require(address(uint160(userId)) == msg.sender, "TheMaster: deposit to your address");
+            _deposit(pool, pid, amount, userId, true);
+        }
+    }
+
+    function _deposit(PoolInfo storage pool, uint256 pid, uint256 amount, uint256 userId, bool tokenTransfer) internal {
         UserInfo storage user = userInfo[pid][userId];
         updatePool(pool, pid);
         uint256 _accRewardPerShare = pool.accRewardPerShare;
-
         uint256 _amount = user.amount;
         if (_amount > 0) {
             uint256 pending = ((user.amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
             safeRewardTransfer(msg.sender, pending);
         }
-        if (pool.delegate) {
-            require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
-        } else {
-            IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
+        if (amount > 0) {
+            if (tokenTransfer) {
+                IERC20(pool.addr).safeTransferFrom(msg.sender, address(this), amount);
+            }
+            pool.supply += amount;
+            _amount += amount;
+            user.amount = _amount;
         }
-        pool.supply += amount;
-        _amount += amount;
-        user.amount = _amount;
         user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
         emit Deposit(userId, pid, amount);
     }
 
-    function withdraw(  //
+    function withdraw(
         uint256 pid,
         uint256 amount,
         uint256 userId
     ) public override {
+        require(pid != supporterPid, "TheMaster: use desupport func");
         PoolInfo storage pool = poolInfo[pid];
+        if (pool.delegate) {
+            require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
+            _withdraw(pool, pid, amount, userId, false);
+        } else {
+            require(address(uint160(userId)) == msg.sender, "TheMaster: Not called by user");
+            _withdraw(pool, pid, amount, userId, true);
+        }
+    }
+
+    function _withdraw(PoolInfo storage pool, uint256 pid, uint256 amount, uint256 userId, bool tokenTransfer) internal {
         UserInfo storage user = userInfo[pid][userId];
         uint256 _amount = user.amount;
         require(_amount >= amount, "TheMaster: Insufficient amount");
         updatePool(pool, pid);
         uint256 _accRewardPerShare = pool.accRewardPerShare;
-        pool.supply -= amount;
         uint256 pending = ((_amount * _accRewardPerShare) / PRECISION) - user.rewardDebt;
         safeRewardTransfer(msg.sender, pending);
-        _amount -= amount;
-        user.amount = _amount;
-        user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
-        if (pool.delegate) {
-            require(pool.addr == msg.sender, "TheMaster: Not called by delegate");
-        } else {
-            require(address(uint160(userId)) == msg.sender, "TheMaster: Not called by user");
-            IERC20(pool.addr).safeTransfer(address(msg.sender), amount);
+        if(amount > 0) {
+            if (tokenTransfer) {
+                IERC20(pool.addr).safeTransfer(msg.sender, amount);
+            }
+            pool.supply -= amount;
+            _amount -= amount;
+            user.amount = _amount;
         }
+        user.rewardDebt = (_amount * _accRewardPerShare) / PRECISION;
         emit Withdraw(userId, pid, amount);
     }
 
-<<<<<<< Updated upstream
-    function emergencyWithdraw(uint256 pid) public override {
-=======
     function emergencyWithdraw(uint256 pid) external override { //
->>>>>>> Stashed changes
         PoolInfo storage pool = poolInfo[pid];
         require(!pool.delegate, "TheMaster: Pool should be non-delegate");
         // updatePool(pool, pid);
@@ -229,29 +254,15 @@ contract TheMaster is Ownable, ITheMaster {
         user.rewardDebt = 0;
     }
 
-<<<<<<< Updated upstream
-    function claimWinningBonus(uint256 userId) public override returns (uint256 amount) {
-=======
-    function claimWinningBonus(address to, uint256 userId) external override returns (uint256 amount) {
->>>>>>> Stashed changes
-        require(winningBonus > 0, "TheMaster: No winning bonus yet");
-        require(userId == lastWinningBonusTaker && userId < WINNING_BONUS_TAKERS, "TheMaster: Not proper user");
-        PoolInfo memory pool = poolInfo[2];
-        require(pool.addr == msg.sender, "TheMaster: Not called by the pool");
-        lastWinningBonusTaker++;
-        amount = winningBonus / WINNING_BONUS_TAKERS;
-        safeRewardTransfer(to, amount);
-        emit ClaimWinningBonus(userId, amount);
-    }
-
-<<<<<<< Updated upstream
-=======
     function mint(address to, uint256 amount) external override {   //
         require(msg.sender == poolInfo[pidByAddr[msg.sender]].mintable, "TheMaster: called from un-mintable");
         maidCoin.mint(to, amount);
     }
 
->>>>>>> Stashed changes
+    function setSupporterPid(uint256 pid, bool status) external onlyOwner {
+        supporterPid[pid] = status;
+    }
+
     function safeRewardTransfer(address to, uint256 amount) internal {
         uint256 balance = maidCoin.balanceOf(address(this));
         if (amount > balance) {
